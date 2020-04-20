@@ -16,22 +16,16 @@ def ast_code_filter(ast_node):
     """
     return isinstance(ast_node,(ast.FunctionDef,ast.ClassDef,ast.AsyncFunctionDef))
 
-def ast_walk(ast_tree):
-    """
-    Like ast.walk, but yields the list of ancestors (ast_lineage)
+def ast_flatten(ast_lineage,result=None):
+    if result is None:
+        result = []
+    if not isinstance(ast_lineage,list):
+        ast_lineage = [ast_lineage]
+    result.append(ast_lineage)
+    for child_node in ast.iter_child_nodes(ast_lineage[-1]):
+        ast_flatten(ast_lineage+[child_node],result)
+    return result
 
-    yields (ast_lineage, nodes)
-
-    Removing items from nodes prevents them from being traversed
-
-    """
-    ast_lineages = [[ast_tree]]
-    while len(ast_lineages) > 0:
-        ast_lineage = ast_lineages.pop(-1)
-        ast_nodes = list(ast.iter_child_nodes(ast_lineage[-1]))
-        yield (ast_lineage,ast_nodes)
-        for ast_node in ast_nodes:
-            ast_lineages.append(ast_lineage+[ast_node])
 def code_tree(importable_name):
     spec = find_spec(importable_name)
     if os.path.basename(spec.origin).lower() == '__init__.py':
@@ -83,7 +77,7 @@ class PackageTree(CodeTree):
 class ModuleTree(CodeTree):
     def __init__(self,origin,parent=None):
         self.origin = origin
-        with open(origin,'rb') as f:
+        with open(origin,'r') as f:
             self.origin_content = f.read()
         self.ast_node = ast.parse(self.origin_content,origin,'exec')
         self.name = os.path.splitext(os.path.basename(origin))[0]
@@ -92,18 +86,17 @@ class ModuleTree(CodeTree):
         self.code_type = CodeType.MODULE
         self.subtree = {}
         self.parent = parent
-        for ast_lineage, ast_nodes in ast_walk(self.ast_node):
-            for ast_node in ast_nodes:
-                if ast_code_filter(ast_node):
-                    self._insert(ast_node,ast_lineage)
-
+        self.flat_ast = ast_flatten(self.ast_node)
+        for index,ast_lineage in enumerate(self.flat_ast):
+            if ast_code_filter(ast_lineage[-1]):
+                self._insert(ast_lineage[-1],ast_lineage[:-1],index)
 
     def walk(self):
         for child in self.subtree.values():
             yield child
             yield from child.walk()
         
-    def _insert(self,ast_node,ast_lineage):
+    def _insert(self,ast_node,ast_lineage,index):
         name = ast_node.name
         code_lineage = [ancestor_ast_node.name for ancestor_ast_node in ast_lineage if ast_code_filter(ancestor_ast_node)]
         target = self
@@ -113,6 +106,7 @@ class ModuleTree(CodeTree):
             else:
                 target.subtree[ancestor_code_node_name] = CodeNode(
                         code_tree=self,name=ancestor_code_node_name,parent=target,ast_node=...,ast_lineage=...,
+                        index=index,
                         )
                 target = target.subtree[ancestor_code_node_name]
         if name in target.subtree:
@@ -123,7 +117,7 @@ class ModuleTree(CodeTree):
             else:
                 raise Exception('Error constructing tree for %s' % '.'.join(code_lineage+[name]))
         else:
-            target = CodeNode(code_tree=self,name=name,parent=target,ast_node=ast_node,ast_lineage=ast_lineage)
+            target = CodeNode(code_tree=self,name=name,parent=target,ast_node=ast_node,ast_lineage=ast_lineage,index=index)
             target.parent.subtree[name] = target
     def __repr__(self):
         return 'ModuleTree(%s)' % (self.name)
@@ -131,12 +125,13 @@ class ModuleTree(CodeTree):
         return repr(self)
 
 class CodeNode(CodeTree):
-    def __init__(self,code_tree,name,parent,ast_node,ast_lineage):
+    def __init__(self,code_tree,name,parent,ast_node,ast_lineage,index):
         self.code_tree = code_tree
         self.name = name
         self.parent = parent 
         self.ast_node = ast_node
         self.ast_lineage = ast_lineage
+        self.index = index
         self.code_type = ast_map[type(ast_node)]
         self.subtree = {}
     def walk(self):
@@ -147,6 +142,16 @@ class CodeNode(CodeTree):
         return 'CodeNode(%s,%s)' % (self.name,self.code_type)
     def __str__(self):
         return repr(self)
+    def prev_node(self):
+        if self.index > 0:
+            return self.code_tree.flat_ast[self.index-1]
+        else:
+            return None
+    def next_node(self):
+        if self.index < len(self.code_tree.flat_ast)-1:
+            return self.code_tree.flat_ast[self.index+1]
+        else:
+            return None
 
 if __name__ == '__main__':
     import os
