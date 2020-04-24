@@ -32,7 +32,7 @@ def code_tree(importable_name):
         return PackageTree(spec.origin)
     else:
         return ModuleTree(spec.origin)
-class CodeTree():
+class CodeNode():
     def lineage(self):
         result = [self]
         parent = self.parent
@@ -41,7 +41,7 @@ class CodeTree():
             parent = parent.parent
         return result[::-1]
 
-class PackageTree(CodeTree):
+class PackageTree(CodeNode):
     def __init__(self,origin,parent=None):
         self.origin = origin
         self.parent = parent
@@ -74,7 +74,7 @@ class PackageTree(CodeTree):
     def __str__(self):
         return repr(self)
 
-class ModuleTree(CodeTree):
+class ModuleTree(CodeNode):
     def __init__(self,origin,parent=None):
         self.origin = origin
         with open(origin,'r') as f:
@@ -104,7 +104,7 @@ class ModuleTree(CodeTree):
             if ancestor_code_node_name in target.subtree:
                 target = target.subtree[ancestor_code_node_name]
             else:
-                target.subtree[ancestor_code_node_name] = CodeNode(
+                target.subtree[ancestor_code_node_name] = DefNode(
                         code_tree=self,name=ancestor_code_node_name,parent=target,ast_node=...,ast_lineage=...,
                         index=index,
                         )
@@ -117,14 +117,14 @@ class ModuleTree(CodeTree):
             else:
                 raise Exception('Error constructing tree for %s' % '.'.join(code_lineage+[name]))
         else:
-            target = CodeNode(code_tree=self,name=name,parent=target,ast_node=ast_node,ast_lineage=ast_lineage,index=index)
+            target = DefNode(code_tree=self,name=name,parent=target,ast_node=ast_node,ast_lineage=ast_lineage,index=index)
             target.parent.subtree[name] = target
     def __repr__(self):
         return 'ModuleTree(%s)' % (self.name)
     def __str__(self):
         return repr(self)
 
-class CodeNode(CodeTree):
+class DefNode(CodeNode):
     def __init__(self,code_tree,name,parent,ast_node,ast_lineage,index):
         self.code_tree = code_tree
         self.name = name
@@ -139,7 +139,7 @@ class CodeNode(CodeTree):
             yield child
             yield from child.walk()
     def __repr__(self):
-        return 'CodeNode(%s,%s)' % (self.name,self.code_type)
+        return 'DefNode(%s,%s)' % (self.name,self.code_type)
     def __str__(self):
         return repr(self)
     def prev_node(self):
