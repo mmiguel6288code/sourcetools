@@ -47,7 +47,7 @@ class PackageTree(CodeNode):
         self.parent = parent
         self.module_tree = ModuleTree(origin,parent=self)
         self.subtree = {}
-        self.code_type = CodeType.MODULE
+        self.code_type = CodeType.PACKAGE
         dirname = os.path.dirname(origin)
         self.name = os.path.basename(dirname)
         for item in sorted(os.listdir(dirname)):
@@ -59,9 +59,6 @@ class PackageTree(CodeNode):
                 if item != '__init__.py':
                     mt = ModuleTree(item_path,parent=self)
                     self.subtree[mt.name] = mt
-    def code_type(self):
-        return 'package'
-
 
     def walk(self):
         yield self.module_tree
