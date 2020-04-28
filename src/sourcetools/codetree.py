@@ -1,3 +1,27 @@
+"""
+Targets a package or module and extracts information from the code inside.
+A module can only be targeted at the top level if it is not inside a package.
+
+The result is a tree of code nodes.
+The root node represents a package or a module that is not within a package.
+
+Types of nodes are:
+    Package
+    Module
+    Class
+    Synchronous Function
+    Asynchronous Function
+
+A package can have any type of node underneath it.
+A package must have an __init__ module underneath and may also have a __main__ and other modules or other packages.
+
+A module can only have classes and functions underneath it.
+Classes and functions can have other classes and functions underneath it.
+
+Code nodes have a root property which points to the root code node.
+They have an origin property that is the full path
+
+"""
 import ast, os.path, os.path
 from importlib.util import find_spec
 from enum import Enum
