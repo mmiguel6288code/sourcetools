@@ -25,11 +25,14 @@ class CodeClause(Enum):
     EXCEPT=auto()
     FINALLY=auto()
 
-def astoid_parse(source):
+def parse(source):
     source_lines = source.splitlines(keepends=True)
     ast_node = ast.parse(source)
-    return _astoid_parse(source_lines,ast_node)
-def _astoid_parse(source_lines,ast_node,parent_astoid=None,homeroom=None):
+    predecessor_astoid = _parse(source_lines,ast_node)
+    predecessor_astoid.successor = None
+    introduce_siblings(ast_node)
+    return ast_node
+def _parse(source_lines,ast_node,parent_astoid=None,homeroom=None,predecessor_astoid=None):
     if homeroom is None:
         homeroom = []
         root=True
@@ -38,75 +41,95 @@ def _astoid_parse(source_lines,ast_node,parent_astoid=None,homeroom=None):
     if isinstance(ast_node,(ast.Module,ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef,ast.With,ast.AsyncWith)):
         #body only
         if len(ast_node.body) > 0:
-            astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.BODY,homeroom)
+            astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.BODY,homeroom,predecessor_astoid)
             homeroom.append(astoid)
+            predecessor_astoid = astoid
             for child_ast_node in ast_node.body:
-                astoid_parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children)
+                predecessor_astoid = _parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children,predecessor_astoid=predecessor_astoid)
     elif isinstance(ast_node,(ast.For,ast.AsyncFor,ast.While)):
         #body and orelse
         if len(ast_node.body) > 0:
             astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.BODY,homeroom)
             homeroom.append(astoid)
+            predecessor_astoid = astoid
             for child_ast_node in ast_node.body:
-                astoid_parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children)
+                predecessor_astoid = _parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children,predecessor_astoid=predecessor_astoid)
         if len(ast_node.orelse) > 0:
-            astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.ELSE,homeroom)
+            astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.ELSE,homeroom,predecessor_astoid)
             homeroom.append(astoid)
+            predecessor_astoid = astoid
             for child_ast_node in ast_node.orelse:
-                astoid_parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children)
+                predecessor_astoid = _parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children,predecessor_astoid=predecessor_astoid)
     elif isinstance(ast_node,ast.If):
-        #clause might be elif
-        #body and orelse
+        #body and orelse - special handling for elif
         if len(ast_node.body) > 0:
             if source_lines[ast_node.lineno-1].lstrip().startswith('elif'):
-                #elevate self at same level as else
-                homeroom = parent_astoid.homeroom
-                astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.ELIF,homeroom)
+                #elevate self at same level as the parent, which is an (ast.If,CodeClause.ELSE) astoid and "cut in front of it"
+                astoid_parent_else = parent_astoid #save parent 
+                assert(astoid_parent_else.type == (ast.If,CodeClause.ELSE)) #check assumptions
+
+                homeroom = astoid_parent_else.homeroom #change home room to be one level up (promotion)
+                parent_astoid = astoid_parent_else.parent #parent update
+
+                #cut in front by changing linked list
+                predecessor_astoid = astoid_parent_else.predecessor
+                astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.ELIF,homeroom,predecessor_astoid) #overwrites successor of predecessor to be self
+                astoid_parent_else.predecessor = ... #needs to be set after all done
+                predecessor_astoid = astoid
             else:
-                astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.BODY,homeroom)
+                astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.BODY,homeroom,predecessor_astoid)
+                predecessor_astoid = astoid
             homeroom.append(astoid)
             for child_ast_node in ast_node.body:
-                astoid_parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children)
+                predecessor_astoid = _parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children,predecessor_astoid=predecessor_astoid)
         if len(ast_node.orelse) > 0:
-            astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.ELSE,homeroom)
+            astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.ELSE,homeroom,predecessor_astoid)
+            predecessor_astoid = astoid
             for child_ast_node in ast_node.orelse:
-                astoid_parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children)
+                predecessor_astoid = _parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children,predecessor_astoid=predecessor_astoid)
+
+                
             #check if there was actually an else, not just elifs
             if len(astoid.children) > 0:
+                #check if unset by an elif
+                if astoid.predecessor == ...:
+                    astoid.predecessor = predecessor_astoid #set to the most recent thing processed
+                    predecessor_astoid.successor = astoid #both sides of link list
                 homeroom.append(astoid)
     elif isinstance(ast_node,ast.Try):
         #body, excepthandlers, orelse, finalbody
         if len(ast_node.body) > 0:
-            astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.BODY,homeroom)
+            astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.BODY,homeroom,predecessor_astoid)
             homeroom.append(astoid)
+            predecessor_astoid = astoid
             for child_ast_node in ast_node.body:
-                astoid_parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children)
+                predecessor_astoid = _parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children,predecessor_astoid=predecessor_astoid)
         if len(ast_node.handlers) > 0:
             for handler_ast_node in ast_node.handlers:
                 if len(handler_ast_node.body) > 0:
                     astoid = Astoid(source_lines,handler_ast_node,parent_astoid,CodeClause.EXCEPT,homeroom)
                     homeroom.append(astoid)
+                    predecessor_astoid = astoid
                     for child_ast_node in handler_ast_node.body:
-                        astoid_parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children)
+                        predecessor_astoid = _parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children,predecessor_astoid=predecessor_astoid)
         if len(ast_node.orelse) > 0:
             astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.ELSE,homeroom)
+            predecessor_astoid = astoid
             homeroom.append(astoid)
             for child_ast_node in ast_node.orelse:
-                astoid_parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children)
+                predecessor_astoid = _parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children,predecessor_astoid=predecessor_astoid)
         if len(ast_node.finalbody) > 0:
             astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.FINALLY,homeroom)
             homeroom.append(astoid)
+            predecessor_astoid = astoid
             for child_ast_node in ast_node.finalbody:
-                astoid_parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children)
+                predecessor_astoid = _parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children,predecessor_astoid=predecessor_astoid)
     else:
         astoid = Astoid(source_lines,ast_node,parent_astoid,None,homeroom)
         homeroom.append(astoid)
+        predecessor_astoid = astoid
 
-    if root:
-        introduce_siblings(homeroom[0])
-        determine_successor(homeroom[0])
-        determine_predecessor(homeroom[0])
-        return homeroom[0]
+    return predecessor_astoid
 
 def introduce_siblings(astoid):
     for prev_sibling,curr_sibling,next_sibling in iterate_with_siblings(astoid.children):
@@ -148,17 +171,24 @@ def determine_predecessor(astoid):
 
 
 class Astoid():
-    def __init__(self,source_lines,ast_node,parent_astoid,clause,homeroom):
+    def __init__(self,source_lines,ast_node,parent_astoid,clause,homeroom,predecessor):
         self.source_lines = source_lines
         self.ast_node = ast_node
         self.clause = clause
+        self.type = (type(ast_node,clause))
         self.parent = parent_astoid
         self.homeroom = homeroom
         self.children = []
         self.prev_sibling = ...
         self.next_sibling = ...
         self.successor = ...
-        self.predecessor = ...
+        self.predecessor = predecessor
+
+        if predecessor is not None:
+            if predecessor.successor == ...:
+                predecessor.successor = self
+            else:
+                raise Exception('Multiple successors')
         self.line_index = ast_node.lineno-1
         self.col_offset = ast_node.col_offset
         if sys.version_info[:2] < (3,8) and isinstance(ast_node,ast.Expr) and isinstance(ast_node.value,ast.Str) and ast_node.col_offset == -1:
@@ -173,10 +203,15 @@ class Astoid():
     def __repr__(self):
         return '<' + str(self) + '>'
 
+    def walk(self):
+        yield self
+        for child in self.children:
+            yield from child.walk()
+
 if __name__ == '__main__':
     import os
     os.environ['PYTHONINSPECT'] = '1'
     with open('astoid.py','r') as f:
         source = f.read()
-    result = astoid_parse(source)
+    result = parse(source)
 

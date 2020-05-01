@@ -1,59 +1,166 @@
 """
+Parse AST -> ast tree
+Astoid tree built off of ast tree
+Code tree built off of astoid tree
 
-AST nodes: What ast standard module parses
-Astoids: one-to-one with AST nodes but with some enhanced methods
-CodeNodes: Nodes that represent a contiguous code block at a given level of indentation, or a module file, or a package folder
+Specific types of astoid nodes correspond to code nodes.
+There is also a special code node called a line block.
+Code nodes have both lines and astoids as part of themselves.
+They have successors, predecessors, parents and children, which are all code nodes.
+Indentation in lines denotes the start of a new set of children nodes.
 
-Module codenode is created:
-    ast nodes are constructed from ast.parse() for module source code
-    module codenode creates the root astoid and provides it information
-    astoids recursively process ast nodes:
-        generates more astoids
-        for special ast nodes, also generates a code node
-        each astoid needs a code node
-        a code node can have multiple astoids
+The line of a code node is the line of its first self astoid.
+The self lines go from this to the line of its successor.
 
+The module code node has no self lines but has an astoid and has children.
+If an astoid increases indentation, it denotes the end of self and start of children.
+    State = new code node
 
+When state = new code, if the astoid is a code type, then that code node gets constructed.
+If it is not a code type, a line block gets constructed.
+Astoids get placed into the code node being constructed.
+Decrease in indentation means code node is done.
+Pop the stack til it matches the new indentation and set state = new code node.
+Increase in indentation should only happen after specific code nodes.
 
-Targets a package or module and extracts information from the code inside.
-The result is a tree of code nodes.
-The root node represents a package or a module that is not within a package.
-If a module inside of a package is targeted, then the top level package containing that module will be loaded as the root instead.
-If the project is laid out as recommended (with src and tests folders), then the test package in the corresponding test folder will be loaded as well.
+Walk through astoids:
+    get line no
+    process lines up to that point and do stuff with them
 
-Types of code nodes are:
-    Package
-    Module
-    Class
-    Synchronous Function
-    Asynchronous Function
-    Lines
-These are identified by the CodeType enumeration.
-
-Lambda functions are not included.
 
 """
-import ast, tokenize, token, sys, os, os.path
-from importlib.util import find_spec
-from enum import Enum, auto
 
-class CodeType(Enum):
-    PACKAGE=auto()
-    MODULE=auto()
-    CLASS=auto()
-    FUNCTION=auto()
-    ASYNCFUNCTION=auto()
-    FOR=auto()
-    ASYNCFOR=auto()
-    WHILE=auto()
-    IF=auto()
-    ELIF=auto()
-    ELSE=auto()
-    WITH=auto()
-    ASYNCWITH=auto()
-    TRY=auto()
-    EXCEPT=auto()
-    LINEBLOCK=auto()
+from enum import Enum, auto
+import ast, re
+from astoid import parse as astoid_parse, CodeClause
+import tokenize, token, sys, os, os.path
+from importlib.util import find_spec
+
+wspace_re = re.compile('^\\s*')
+
+
+ast_type_map = {
+        ast.Module:CnodeModule,
+        ast.ClassDef:CnodeClass,
+        ast.FunctionDef:CnodeFunction,
+        ast.AsyncFunctionDef:CnodeAsyncFunction,
+        }
+
+class ParseState(Enum):
+    NEWBLOCK=auto()
+    BUILD=auto()
+    ENDBLOCK=auto()
+    DONE=auto()
+
+def parse(source,parent_cnode=None):
+    astoid_tree = astoid.parse(source)
+    source_lines = astoid_tree.source_lines
+    stack = []
+    cnode = None
+
+    astoid_tree_walk = astoid_tree.walk()
+
+    state = ParseState.NEWBLOCK
+    astoid = None
+    get_next = True
+    while state != ParseState.DONE:
+        if get_next:
+            try:
+                astoid = next(astoid_tree_walk)
+            except StopIteration:
+                state == ParseState.DONE
+                astoid = None
+        get_next = True #default for next iteration will be to get next unless explicitly told otherwise below in this iteration
+        if state == ParseState.NEWBLOCK:
+            ast_type,clause = astoid.type
+            if clause is None:
+                #block
+                cnode = CnodeBlock(parent_cnode)
+                next_state = cnode.add_astoid(astoid,state)
+            else:
+                #not block
+                if ast_type in ast_type_map:
+                    cnode_class = ast_type_map[ast_type]
+                    cnode = cnode_class(parent_cnode)
+                    next_state = cnode.add_astoid(astoid,state)
+                else:
+                    raise Exception('Unexpected type: %s' % repr(astoid.type))
+        elif state == ParseState.BUILD:
+            next_state = cnode.add_astoid(astoid,state)
+        elif state == ParseState.DONE:
+            next_state = ParseState.DONE
+
+        else:
+            raise Exception('Invalid state: %s' % repr(state))
+
+        if next_state == ParseState.NEWBLOCK:
+            stack.append(cnode)
+            parent_cnode = cnode
+            cnode = None
+        elif next_state == ParseState.ENDBLOCK:
+            if len(stack) > 0:
+                get_next = False #astoid not consumed, send same astoid through loop again after popping stack and changing state
+                cnode = stack.pop()
+                parent_cnode = cnode.parent
+                next_state = ParseState.BUILD
+            else:
+                next_state = ParseState.DONE
+        elif next_state == ParseState.BUILD:
+            pass
+        elif next_state == ParseState.DONE:
+            pass
+        else:
+            raise Exception('Invalid state transition: %s to %s' % (repr(state),repr(next_state)))
+        state = next_state
+    return cnode
+
+class Cnode():
+    def __init__(self,parent):
+        self.parent = parent
+        self.astoids = []
+
+    def add_astoid(self,astoid,parse_state):
+        initialization = (len(self.astoids) == 0)
+        next_parse_state = self.process_astoid(astoid,parse_state)
+        if initialization:
+            self.init(self,astoid)
+
+    def init(self,first_astoid):
+        raise NotImplementedError('This method is intended to be overwritten by subclasses')
+        self.indentation = ...
+        self.line_index = ...
+        self.predecessor = 
+    def process_astoid(self,astoid,parse_state):
+        raise NotImplementedError('This method is intended to be overwritten by subclasses')
+
+class CnodePackage(Cnode):
+    ...
+class CnodeModule(Cnode):
+    def process_astoid(self,astoid,parse_state):
+        if len(self.astoids) == 0 and astoid.type == (ast.Module,CodeClause.BODY):
+            self.astoids.append(astoid)
+        else:
+            raise Exception('Only a single module body astoid should be added a CnodeModule')
+        return ParseState.NEWBLOCK
+
+class CnodeClass(Cnode):
+    ...
+
+class CnodeFunction(Cnode):
+    ...
+
+class CnodeAsyncFunction(CnodeFunction):
+    pass #identical to CnodeFunction for now
+
+class CnodeBlock(Cnode):
+    def add_astoid(self,astoid,parse_state):
+        if len(self.astoids) == 0 and astoid.type == (ast.Module,CodeClause.BODY):
+            self.astoids.append(astoid)
+        else:
+            raise Exception('Only a single module body astoid should be added a CnodeModule')
+        return ParseState.BUILD
+
+
 
 def code_tree(target):
     """
