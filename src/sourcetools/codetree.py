@@ -1,4 +1,20 @@
 """
+
+AST nodes: What ast standard module parses
+Astoids: one-to-one with AST nodes but with some enhanced methods
+CodeNodes: Nodes that represent a contiguous code block at a given level of indentation, or a module file, or a package folder
+
+Module codenode is created:
+    ast nodes are constructed from ast.parse() for module source code
+    module codenode creates the root astoid and provides it information
+    astoids recursively process ast nodes:
+        generates more astoids
+        for special ast nodes, also generates a code node
+        each astoid needs a code node
+        a code node can have multiple astoids
+
+
+
 Targets a package or module and extracts information from the code inside.
 The result is a tree of code nodes.
 The root node represents a package or a module that is not within a package.
@@ -17,45 +33,27 @@ These are identified by the CodeType enumeration.
 Lambda functions are not included.
 
 """
-import ast, os.path, os.path
+import ast, tokenize, token, sys, os, os.path
 from importlib.util import find_spec
-from enum import Enum
+from enum import Enum, auto
 
 class CodeType(Enum):
-    PACKAGE=1
-    MODULE=2
-    CLASS=3
-    FUNCTION=4
-    ASYNCFUNCTION=5
-    FOR=6
-    ASYNCFOR=7
-    WHILE=8
-    IF=9
-    WITH=10
-    ASYNCWITH=11
-    TRY=12
-    LINEBLOCK=13
-
-
-def ast_ordered_walk(ast_node):
-    """
-    walk() method in ast standard module has no specified order
-    """
-    yield ast_node
-    for child_node in ast.iter_child_nodes(ast_node):
-        yield from ast_ordered_walk(child_node)
-def iterate_with_siblings(iterable):
-    prev_sibling = None
-    curr_sibling = None
-    items = list(iterable)
-    for next_sibling in items:
-        if curr_sibling is not None:
-            yield (prev_sibling,curr_sibling,next_sibling)
-        prev_sibling = curr_sibling
-        curr_sibling = next_sibling
-    if curr_sibling is not None:
-        next_sibling = None
-        yield (prev_sibling,curr_sibling,next_sibling)
+    PACKAGE=auto()
+    MODULE=auto()
+    CLASS=auto()
+    FUNCTION=auto()
+    ASYNCFUNCTION=auto()
+    FOR=auto()
+    ASYNCFOR=auto()
+    WHILE=auto()
+    IF=auto()
+    ELIF=auto()
+    ELSE=auto()
+    WITH=auto()
+    ASYNCWITH=auto()
+    TRY=auto()
+    EXCEPT=auto()
+    LINEBLOCK=auto()
 
 def code_tree(target):
     """
@@ -107,9 +105,10 @@ Every type of code node has the following attributes:
     children = List of children code nodes
 
     source_path = Path to package folder for packages or module .py file for other types of code nodes. 
-    line_index = Zero-based line index for the line ending with a colon items that are followed by an indented block (None for packages, modules, and lineblocks)
-    indentation = Leading whitespace string at the def_line (None for packages, modules, and lineblocks)
+    line_index = Zero-based line index for the first line (None for packages, modules)
+    indentation = Leading whitespace string (None for packages, modules)
     lines = List of lines of code. Indentation and ending carriage returns/newlines are stripped.
+    starts_block = True if the next sibling should indicate an increase in indentation (False for packages, modules, lineblocks)
 
     docstring = A DocstringInterface instance (None for anything besides modules, functions, classes, async functions)
 
@@ -123,6 +122,9 @@ Every type of code node has the following methods:
     walk() = Iterate recursively through children depth-first
     write() = For non-packages, dispatched to the module i.e. equivalent to .module.write(). Rewrites the file using the the def_indentation, block_indentation, def_lines, and block_lines of all elements within the module. The line indices are not used. For packages, dispatched to all child elements.
     reload() = Returns a fresh copy of the code tree from reading all the files. Does not incorporate local code tree changes or modify the local code tree in any way.
+    get_end_line_index() = Returns the start line index of the next sibling or the number of lines in the source file if next sibling is None; Returns None if 
+    get_module_raw_lines() = Returns a list of the raw lines (including indentation and carriage returns/newlines) of the module
+    get_indentation(line_index)
     """
     def get_lineage(self):
         result = [self]
@@ -145,9 +147,54 @@ Every type of code node has the following methods:
         return code_tree(self.root.source_path)
 
     def order_siblings(self):
+        for child in self.children:
+            child.order_siblings()
         for prev_sibling,curr_sibling,next_sibling in iterate_with_siblings(self.children):
             curr_sibling.prev_sibling = prev_sibling
             curr_sibling.next_sibling = next_sibling
+    def populate_line_info(self):
+        for child in self.children:
+            child.populate_line_info()
+        next_sibling = self.next_sibling()
+        if next_sibling is not None:
+
+        else:
+
+    def get_module_raw_lines(self):
+        return self.module.source_raw_lines
+    def get_indentation(self,line_index=None):
+        if line_index is None:
+            line_index = self.line_index
+        raw_line = self.module.source_raw_lines[line_index]
+        tokens = tokenize_raw_lines([raw_line])
+        if len(tokens) > 0:
+            first_token = tokens[0]
+            if token.tok_name[first_token.type] == 'INDENT':
+                return first_token.string
+            else:
+                return ''
+
+        else:
+            return ''
+    def process_docstring(self,ast_body):
+        """
+        Detects a docstring if it exists
+        Removes it from ast_body if it does exist
+        """
+        if len(ast_body) > 0:
+            first_element = ast_body[0]
+            if isinstance(first_element,ast.Expr) and isinstance(first_element.value,ast.Str):
+                if len(ast_body) >= 2:
+                    next_line_index = ast_body[1].lineno-1
+                else:
+                    next_sibling = self.next_sibling()
+                    if next_sibling is not None:
+                        next_sibling
+                    else:
+                self.docstring.set_ast(first_element,next_line_index)
+                ast_body.pop(0)
+
+
 
 class PackageNode(CodeNode):
     def __init__(self,source_path,parent_info=None,loaded_as_test=False):
@@ -160,6 +207,7 @@ class PackageNode(CodeNode):
         self.line_index = None
         self.indentation = None
         self.lines = None
+        self.starts_block = False
         self.docstring = None
         self.test = TestInterface(self)
         self.loaded_as_test = loaded_as_test
@@ -198,6 +246,12 @@ class PackageNode(CodeNode):
         return 'PackageNode(%s)' % (self.name)
     def __str__(self):
         return repr(self)
+    def get_module_raw_lines(self):
+        return None
+    def get_indentation(self,line_index=None):
+        return None
+    def process_docstring(self,*args):
+        return None
 
 class ModuleNode(CodeNode):
     """
@@ -235,6 +289,7 @@ Every type of code node has the following attributes:
         self.line_index = None
         self.indentation = None
         self.lines = None
+        self.starts_block = False
         self.test = TestInterface(self)
         self.loaded_as_test = loaded_as_test
 
@@ -252,13 +307,15 @@ Every type of code node has the following attributes:
             self.next_sibling = ... #to be filled when parent calls order_siblings()
         self.module = self
 
-        self.docstring = DocstringInterface(self)
-        self.ast = AstInterface(self)
+        #self.docstring = DocstringInterface(self)
+        #self.ast = AstInterface(self)
         self.children = []
         with open(source_path,'r') as f:
-            source_content = f.read()
-        ast_module = ast.parse(source_content,source_path,'exec')
-        ast_body = list(ast_module.body)
+            self.source_content = f.read()
+        self.source_raw_lines = source_content.splitlines(True)
+        self.ast_node = ast.parse(source_content,source_path,'exec')
+        self.astoids = [Astoid(self,self.ast_node)]
+        ast_body = self.ast_structure[0][1]
         self.process_docstring(ast_body)
         last_child_lineblock = False
         for ast_child in ast_body:
@@ -271,12 +328,10 @@ Every type of code node has the following attributes:
                 if not last_child_lineblock:
                     self.children.append(LineblockNode(self,ast_child,CodeType.LINEBLOCK))
                 last_child_lineblock = True
-        self.order_siblings()
+        self.order_siblings() #introduce child nodes to their adjacent siblings
         self.populate_line_info()
-    def process_docstring(self,ast_body):
-        ...
-    def populate_line_info(self):
-        ...
+
+
     def write(self):
         ...
     def __repr__(self):
@@ -284,8 +339,86 @@ Every type of code node has the following attributes:
     def __str__(self):
         return repr(self)
 
+
+
+
+
+class Astoid():
+    """
+    """
+    def __init__(self,code_node,ast_node,parent=None,index_list=None):
+        self.code_node = code_node
+        self.ast_node = ast_node
+        self.parent = parent
+        if index_list is None:
+            self.index_list = [0]
+        else:
+            self.index_list = index_list
+        if isinstance(ast_node,ast.Module):
+        elif isinstance(ast_node,ast.FunctionDef):
+        elif isinstance(ast_node,ast.AsyncFunctionDef
+        self.children = []
+        if
+        for child_index,child_ast_node in enumerate(ast.iter_child_nodes(ast_raw_node)):
+            child_raw_node_type = type(child_raw_node)
+            if child_raw_node_type in ast_raw_type_map:
+                #code type of object
+                child_code_type,child_code_class = ast_raw_type_map[child_raw_node_type]
+                child_code_node = child_code_class(child_code_type,self.code_node)
+                self.code_node.children.append(child_code_node)
+            else:
+                if lineblock_code_node is None:
+                    lineblock_code_node = LineblockNode()
+                child_code_node = lineblock_code_node
+
+            child_ast_node = AstNode(child_code_node,child_raw_node,self,self.index_list+[child_index])
+
+            self.children.append(AstNode(child_raw_node,self,self.index_list+[child_index]))
+        if isinstance(ast_raw_node,ast.Module):
+            self.introduce_siblings()
+            self.determine_successor()
+
+    def introduce_siblings(self):
+        for child in self.children:
+            child.introduce_siblings()
+        for prev_sibling,curr_sibling,next_sibling in iterate_with_siblings(self.children):
+            curr_sibling.prev_sibling = prev_sibling
+            curr_sibling.next_sibling = next_sibling
+
+    def determine_successor(self):
+        for child in self.children:
+            child.determine_successor()
+        if len(self.children) > 0:
+            self.successor = self.children[0]
+        elif self.next_sibling is not None:
+            self.successor = self.next_sibling
+        else:
+            ancestor = self.parent
+            while ancestor is not None:
+                if ancestor.next_sibling is not None:
+                    self.successor = ancestor.next_sibling
+                    break
+                else:
+                    ancestor = ancestor.parent
+            else:
+                self.successor = None
+    def get_lineno(self):
+        if hasattr(self.ast_raw_node,'lineno'):
+            return self.ast_raw_node.lineno
+        else:
+            if len(self.children) > 0:
+                return self.children[0].get_lineno()
+            else:
+                raise Exception('No lineno')
+
+
+
+def tokenize_raw_lines(raw_lines):
+    return list(tokenize.generate_tokens((raw_line for raw_line in raw_lines).__next__))
+
+
 class DefNode(CodeNode):
-    def __init__(self,parent,ast_node,code_type):
+    def __init__(self,code_type,parent):
         self.code_tree = code_tree
         self.name = name
         self.parent = parent 
@@ -322,19 +455,30 @@ class DocstringInterface():
 Docstring nodes represent docstrings and doctests of module, class, or function code nodes.
 
 Docstring nodes have the following attributes:
+    code_node
     exists = Whether docstring exists or not
     has_doctests = Whether doctests are present or not
-    start_line
-    end_line
-    quote_indentation
-    lines
+    line_index = Zero-based line index for the first line (None for packages, modules)
+    indentation = Leading whitespace string (None for packages, modules)
+    lines = List of lines of code. Indentation and ending carriage returns/newlines are stripped.
 
 Docstring nodes have the following methods:
     save()
     run_doctests()
     """
+    def __init__(self,code_node):
+        self.code_node = code_node
+        self.exists = False
+        self.start_lin
 
-    ...
+    def set_ast(self,ast_obj,next_line_index):
+        self.exists = True
+        self.line_index = ast_obj.lineno-1
+        self.indentation = self.code_node.get_indentation(self.line_index)
+        end_line_index = 
+        self.lines = ast_obj.value.s.splitlines()
+        self.st
+
 class TestInterface():
     """
 Test nodes represent test information for a given code node.
@@ -420,17 +564,7 @@ Test nodes have the following methods:
 
     """
     ...
-class AstInterface():
-    """
-Ast nodes represent abstract syntax tree info (see python ast module documentation)
-
-Test nodes have the following attributes:
-    parent
-    ast
-    """
-    ...
-
-ast_type_map = {
+ast_raw_type_map = {
         ast.Module:(CodeType.MODULE,ModuleNode),
         ast.ClassDef:(CodeType.CLASS,DefNode),
         ast.FunctionDef:(CodeType.FUNCTION,DefNode),
@@ -443,6 +577,7 @@ ast_type_map = {
         ast.AsyncWith:(CodeType.ASYNCWITH,BlockNode),
         ast.Try:(CodeType.Try,BlockNode),
         }
+
 if __name__ == '__main__':
     import os
     os.environ['PYTHONINSPECT'] = '1'
