@@ -1,5 +1,5 @@
 from enum import Enum,auto
-import ast
+import ast, sys
 def iterate_with_siblings(iterable):
     """
     Yields triplets of an item with its adjacent siblings
@@ -26,7 +26,7 @@ class CodeClause(Enum):
     FINALLY=auto()
 
 def astoid_parse(source):
-    source_lines = source.splitlines()
+    source_lines = source.splitlines(keepends=True)
     ast_node = ast.parse(source)
     return _astoid_parse(source_lines,ast_node)
 def _astoid_parse(source_lines,ast_node,parent_astoid=None,homeroom=None):
@@ -159,6 +159,15 @@ class Astoid():
         self.next_sibling = ...
         self.successor = ...
         self.predecessor = ...
+        self.line_index = ast_node.lineno-1
+        self.col_offset = ast_node.col_offset
+        if sys.version_info[:2] < (3,8) and isinstance(ast_node,ast.Expr) and isinstance(ast_node.value,ast.Str) and ast_node.col_offset == -1:
+            #issue 16806 lineno wrong for multiline string - fixed in python 3.8
+            self.line_index -= ast_node.value.s.count('\n') #adjust to point to beginning of multiline string instead of end
+            line = source_lines[self.line_index] #grab first line of source code where multiline string starts
+            line_str = ast_node.value.s.splitlines(keepends=True)[0] #grab string content after triple quote start of string in that line
+            self.col_offset = len(line)-len(line_str)-3 #calculate start of triple quote in first line
+                
     def __str__(self):
         return 'Astoid(%s,%s)' % (type(self.ast_node).__name__,repr(self.clause))
     def __repr__(self):
