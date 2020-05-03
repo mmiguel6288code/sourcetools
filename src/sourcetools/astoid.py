@@ -207,6 +207,14 @@ class Astoid():
         yield self
         for child in self.children:
             yield from child.walk()
+    def skip_next(self):
+        if self.next_sibling is not None:
+            return self.next_sibling
+        return self.sucessor
+    def skip_prev(self):
+        if self.prev_sibling is not None:
+            return self.prev_sibling
+        return self.predecessor
 
 if __name__ == '__main__':
     import os
