@@ -1,3 +1,5 @@
+""" astoid is ast with more features
+"""
 from enum import Enum,auto
 import ast, sys
 def iterate_with_siblings(iterable):
@@ -25,9 +27,9 @@ class CodeClause(Enum):
     EXCEPT=auto()
     FINALLY=auto()
 
-def parse(source):
-    source_lines = source.splitlines(keepends=True)
-    ast_node = ast.parse(source)
+def parse(source_text):
+    source_lines = source_text.splitlines(keepends=True)
+    ast_node = ast.parse(source_text)
     predecessor_astoid = _parse(source_lines,ast_node)
     predecessor_astoid.successor = None
     introduce_siblings(ast_node)
@@ -49,7 +51,7 @@ def _parse(source_lines,ast_node,parent_astoid=None,homeroom=None,predecessor_as
     elif isinstance(ast_node,(ast.For,ast.AsyncFor,ast.While)):
         #body and orelse
         if len(ast_node.body) > 0:
-            astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.BODY,homeroom)
+            astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.BODY,homeroom,predecessor_astoid)
             homeroom.append(astoid)
             predecessor_astoid = astoid
             for child_ast_node in ast_node.body:
@@ -107,25 +109,25 @@ def _parse(source_lines,ast_node,parent_astoid=None,homeroom=None,predecessor_as
         if len(ast_node.handlers) > 0:
             for handler_ast_node in ast_node.handlers:
                 if len(handler_ast_node.body) > 0:
-                    astoid = Astoid(source_lines,handler_ast_node,parent_astoid,CodeClause.EXCEPT,homeroom)
+                    astoid = Astoid(source_lines,handler_ast_node,parent_astoid,CodeClause.EXCEPT,homeroom,predecessor_astoid)
                     homeroom.append(astoid)
                     predecessor_astoid = astoid
                     for child_ast_node in handler_ast_node.body:
                         predecessor_astoid = _parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children,predecessor_astoid=predecessor_astoid)
         if len(ast_node.orelse) > 0:
-            astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.ELSE,homeroom)
+            astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.ELSE,homeroom,predecessor_astoid)
             predecessor_astoid = astoid
             homeroom.append(astoid)
             for child_ast_node in ast_node.orelse:
                 predecessor_astoid = _parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children,predecessor_astoid=predecessor_astoid)
         if len(ast_node.finalbody) > 0:
-            astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.FINALLY,homeroom)
+            astoid = Astoid(source_lines,ast_node,parent_astoid,CodeClause.FINALLY,homeroom,predecessor_astoid)
             homeroom.append(astoid)
             predecessor_astoid = astoid
             for child_ast_node in ast_node.finalbody:
                 predecessor_astoid = _parse(source_lines=source_lines,ast_node=child_ast_node,parent_astoid=astoid,homeroom=astoid.children,predecessor_astoid=predecessor_astoid)
     else:
-        astoid = Astoid(source_lines,ast_node,parent_astoid,None,homeroom)
+        astoid = Astoid(source_lines,ast_node,parent_astoid,None,homeroom,predecessor_astoid)
         homeroom.append(astoid)
         predecessor_astoid = astoid
 
@@ -175,7 +177,7 @@ class Astoid():
         self.source_lines = source_lines
         self.ast_node = ast_node
         self.clause = clause
-        self.type = (type(ast_node,clause))
+        self.type = (type(ast_node),clause)
         self.parent = parent_astoid
         self.homeroom = homeroom
         self.children = []
@@ -183,14 +185,19 @@ class Astoid():
         self.next_sibling = ...
         self.successor = ...
         self.predecessor = predecessor
+        self.cnode = None
 
         if predecessor is not None:
             if predecessor.successor == ...:
                 predecessor.successor = self
             else:
                 raise Exception('Multiple successors')
-        self.line_index = ast_node.lineno-1
-        self.col_offset = ast_node.col_offset
+        if not isinstance(ast_node,ast.Module):
+            self.line_index = ast_node.lineno-1
+            self.col_offset = ast_node.col_offset
+        else:
+            self.line_index = None
+            self.col_offset = None
         if sys.version_info[:2] < (3,8) and isinstance(ast_node,ast.Expr) and isinstance(ast_node.value,ast.Str) and ast_node.col_offset == -1:
             #issue 16806 lineno wrong for multiline string - fixed in python 3.8
             self.line_index -= ast_node.value.s.count('\n') #adjust to point to beginning of multiline string instead of end
