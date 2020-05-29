@@ -161,6 +161,7 @@ class Cnode():
             self.indentation = wspace_re.search(first_line).group(0)
         else:
             self.indentation = None
+        self.source_lines = first_astoid.source_lines
         return next_parse_state
 
     def final(self):
@@ -179,12 +180,22 @@ class Cnode():
             next_parse_state = self.init(astoid,next_parse_state)
         return next_parse_state
 
-
     def process_astoid(self,astoid,parse_state):
         raise NotImplementedError('This method is intended to be overwritten by subclasses')
         self.astoids.append(astoid)
         next_parse_state = ...
         return next_parse_state
+    def walk(self):
+        target = self
+        while target is not None:
+            yield target
+            target = target.successor
+    def get_lines(self):
+        if self.successor is not None:
+            return self.source_lines[self.line_index:self.successor.line_index]
+        else:
+            return self.source_lines[self.line_index:]
+
 
 
 class CnodePackage(Cnode):
